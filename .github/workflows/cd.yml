@@ -1,0 +1,155 @@
+name: CD Pipeline — IAM System
+
+on:
+  push:
+    branches: [main]
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}/iam-api
+
+jobs:
+
+  # ── Tag the image with semver (via release-please) ───────────────────
+  tag-image:
+    name: Tag Image with Semver
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-digest: ${{ steps.retag.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retag SHA image with semver (if release tag present)
+        id: retag
+        run: |
+          SHA_TAG="${{ env.IMAGE }}:sha-${{ github.sha }}"
+          echo "Using image: $SHA_TAG"
+          # If this push is a release tag (vX.Y.Z), also apply the semver tag
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            SEMVER="${GITHUB_REF#refs/tags/}"
+            docker pull "$SHA_TAG"
+            docker tag "$SHA_TAG" "${{ env.IMAGE }}:${SEMVER}"
+            docker tag "$SHA_TAG" "${{ env.IMAGE }}:latest"
+            docker push "${{ env.IMAGE }}:${SEMVER}"
+            docker push "${{ env.IMAGE }}:latest"
+            echo "Tagged: ${{ env.IMAGE }}:${SEMVER}"
+          fi
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$SHA_TAG" 2>/dev/null || echo "$SHA_TAG")
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+  # ── Development: auto-deploy, smoke test ─────────────────────────────
+  deploy-dev:
+    name: Deploy → Development
+    runs-on: ubuntu-latest
+    needs: tag-image
+    environment: development
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: true
+    steps:
+      - name: Trigger Render dev deploy
+        run: curl -sf -X POST "${{ secrets.RENDER_DEV_DEPLOY_HOOK }}"
+
+      - name: Wait for service to start
+        run: sleep 30
+
+      - name: Smoke test — /health
+        run: |
+          curl --fail --retry 3 --retry-delay 10 \
+            "${{ vars.DEV_BASE_URL }}/health" | jq .
+
+      - name: Smoke test — /auth/ping (unauthenticated should return 401)
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${{ vars.DEV_BASE_URL }}/auth/ping")
+          if [ "$STATUS" != "401" ]; then
+            echo "Expected 401, got $STATUS"
+            exit 1
+          fi
+          echo "Auth guard confirmed — ping returned 401 as expected"
+
+  # ── Staging: auto-promote, full integration + E2E ────────────────────
+  deploy-staging:
+    name: Deploy → Staging
+    runs-on: ubuntu-latest
+    needs: deploy-dev
+    environment: staging
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm ci
+
+      - name: Trigger Render staging deploy
+        run: curl -sf -X POST "${{ secrets.RENDER_STAGING_DEPLOY_HOOK }}"
+
+      - name: Wait for service to start
+        run: sleep 45
+
+      - name: Run E2E auth flow tests against staging
+        run: npm run test:e2e -- --baseUrl "${{ vars.STAGING_BASE_URL }}"
+        env:
+          JWT_SECRET: ${{ secrets.STAGING_JWT_SECRET }}
+          JWT_REFRESH_SECRET: ${{ secrets.STAGING_JWT_REFRESH_SECRET }}
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          NODE_ENV: staging
+
+  # ── Production: manual approval gate, rolling deploy, auto-rollback ──
+  deploy-production:
+    name: Deploy → Production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    environment:
+      name: production          # approval gate configured in GitHub Environment settings
+      url: ${{ vars.PROD_BASE_URL }}
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false  # never cancel an in-flight production deploy
+    steps:
+      - name: Deploy to Production (Render rolling update)
+        run: curl -sf -X POST "${{ secrets.RENDER_PROD_DEPLOY_HOOK }}"
+
+      - name: Post-deploy health verification (6 × 10s)
+        id: healthcheck
+        run: |
+          echo "Starting post-deploy health check..."
+          for i in 1 2 3 4 5 6; do
+            sleep 10
+            echo "Attempt $i/6..."
+            if curl --fail --silent "${{ vars.PROD_BASE_URL }}/health"; then
+              echo "Health check passed on attempt $i"
+              exit 0
+            fi
+          done
+          echo "All 6 health checks failed"
+          exit 1
+
+      - name: Auto-rollback on health check failure
+        if: failure() && steps.healthcheck.outcome == 'failure'
+        run: |
+          echo "Health check failed — triggering rollback to previous image digest"
+          curl -sf -X POST "${{ secrets.RENDER_PROD_ROLLBACK_HOOK }}"
+          echo "Rollback triggered. MTTR clock started."
+
+      - name: Record deployment event (DORA — Deployment Frequency)
+        if: success()
+        run: |
+          echo "Deployment successful at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "Image: ${{ env.IMAGE }}:sha-${{ github.sha }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Triggered by: ${{ github.actor }}"
