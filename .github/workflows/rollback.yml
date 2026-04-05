@@ -1,0 +1,51 @@
+name: Manual Rollback — Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: 'GHCR image digest to roll back to (e.g. sha256:abc123...)'
+        required: true
+        type: string
+      reason:
+        description: 'Reason for manual rollback (recorded in deployment log)'
+        required: true
+        type: string
+
+jobs:
+  rollback:
+    name: Rollback Production to Specific Digest
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.PROD_BASE_URL }}
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Log rollback initiation
+        run: |
+          echo "===== MANUAL ROLLBACK INITIATED ====="
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Target digest: ${{ inputs.image_digest }}"
+          echo "Reason: ${{ inputs.reason }}"
+          echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Trigger Render production rollback
+        run: |
+          curl -sf -X POST "${{ secrets.RENDER_PROD_ROLLBACK_HOOK }}" \
+            -H "Content-Type: application/json" \
+            -d '{"imageDigest": "${{ inputs.image_digest }}"}'
+
+      - name: Verify rollback health (6 × 10s)
+        run: |
+          for i in 1 2 3 4 5 6; do
+            sleep 10
+            echo "Health check attempt $i/6..."
+            if curl --fail --silent "${{ vars.PROD_BASE_URL }}/health"; then
+              echo "Service healthy after rollback"
+              exit 0
+            fi
+          done
+          echo "Service still unhealthy after rollback — manual intervention required"
+          exit 1
