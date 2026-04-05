@@ -1,0 +1,11 @@
+# JWT and auth — security lead must review
+/src/auth/                    @team/security-lead
+/src/middleware/rbac/         @team/security-lead
+/src/config/jwt.config.*      @team/security-lead @team/lead-dev
+
+# Pipeline and infrastructure — ops lead must review
+/.github/workflows/           @team/ops-lead
+/Dockerfile                   @team/ops-lead
+
+# Global fallback
+*                             @team/lead-dev
