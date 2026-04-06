@@ -6,13 +6,15 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 COPY package.json ./
 
-RUN npm install --ignore-scripts 2>/dev/null || true && \
-    mkdir -p node_modules
+RUN mkdir -p node_modules && npm install --ignore-scripts 2>/dev/null; exit 0
 
-COPY . .
+COPY src/ ./src/
 
 USER appuser
 
 EXPOSE 3000
 
-CMD ["node", "-e", "const h=require('http');h.createServer((q,r)=>{r.end(JSON.stringify({status:'ok'}))}).listen(3000)"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:3000/health || exit 1
+
+CMD ["node", "src/index.js"]
