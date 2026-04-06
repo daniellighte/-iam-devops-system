@@ -105,4 +105,14 @@ npm run dev               # starts server on :3000
 |Deployment    |Render           |Rolling updates, health checks, deploy hooks|
 |Versioning    |release-please   |Conventional Commits → semver automation    |
 |Feature flags |Unleash          |Deploy/release decoupling                   |
-|Monitoring    |Grafana + Loki   |DORA dashboard, SLO alerting                |
+|Monitoring    |Grafana + Loki   |DORA dashboard, SLO alerting     
+
+
+|
+
+<!-- pipeline test -->
+
+
+
+
+
