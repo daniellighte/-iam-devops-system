@@ -110,7 +110,7 @@ npm run dev               # starts server on :3000
 
 |
 
-<!-- pipeline tests -->
+<!-- pipeline ttests -->
 <!-- pipeline tests -->
 
 
