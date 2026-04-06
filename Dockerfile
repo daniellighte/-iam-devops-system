@@ -6,7 +6,7 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 COPY package.json ./
 
-RUN mkdir -p node_modules && npm install --ignore-scripts 2>/dev/null; exit 0
+RUN npm install --ignore-scripts 2>/dev/null; exit 0
 
 COPY src/ ./src/
 
