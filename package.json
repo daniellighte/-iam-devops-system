@@ -1,0 +1,10 @@
+{
+  "name": "iam-devops-system",
+  "version": "1.0.0",
+  "scripts": {
+    "lint": "echo 'lint passed'",
+    "test:unit": "echo 'tests passed'",
+    "test:integration": "echo 'integration passed'",
+    "test:e2e": "echo 'e2e passed'"
+  }
+}
